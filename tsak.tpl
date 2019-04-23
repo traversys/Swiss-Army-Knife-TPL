@@ -9,39 +9,6 @@ metadata
     tree_path:='Traversys', 'Extensions', 'TSAK';
 end metadata;
 
-definitions custom_funcs 1.0
-
-    define getUID(s) -> env, user
-        """Find out the user from the user ID if possible"""
-
-        
-        suid:= "%s.uid%"; // Converts to text
-        // If the username is a UID, instead of text string
-        if s.username = suid then
-            // Get current discovery access
-            da:= discovery.access(s);
-            das:= size(da);
-            log.debug("DA found? %das%");
-            // Run command on the host (discovery access)
-            pwd:= discovery.fileGet(da, "/etc/passwd");
-            if pwd and pwd.content then
-                // Looking for the UID to match to the username
-                rx:= raw "(\w+):x:" + suid + ":";
-                //rx:= regex "(\w+):x:708:";
-                log.debug("Using regex %rx%");
-                uid:= regex.extract(pwd.content, rx, raw "\1", no_match:= s.username);
-                log.debug("UID is set to %uid%");
-                user:= uid;
-                env:= mota_funcs.split_env(uid);
-            end if;
-        end if;
-        
-        return env, user;
-        
-    end define;
-
-end definitions;
-
 pattern TSAK_Host 1.0
   """
   Author: Wes Moskal-Fitzpatrick
