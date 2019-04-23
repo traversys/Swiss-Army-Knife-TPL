@@ -31,7 +31,7 @@ pattern TSAK_Host 1.0
   
   body
 
-    if h.os_type:= "Windows" then
+    if h.os_type = "Windows" then
     
         // Get Device LDAP Details
         dn                          := discovery.registryKey(h, raw "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\State\Machine\Distinguished-Name");
@@ -48,11 +48,11 @@ pattern TSAK_Host 1.0
         
         // Get DNS Servers
         dns                         := discovery.wmiQuery(h, 'SELECT DNSServerSearchOrder FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled=1', 'root\CIMV2');
-        h.tsak_dns_servers          := wmi[0].DNSServerSearchOrder;
+        h.tsak_dns_servers          := dns[0].DNSServerSearchOrder;
         
         // Get BIOS Version
         bios                        := discovery.wmiQuery(h, 'SELECT SMBIOSBIOSVersion FROM Win32_BIOS', 'root\CIMV2');
-        h.tsak_bios_version         := wmi[0].SMBIOSBIOSVersion;
+        h.tsak_bios_version         := bios[0].SMBIOSBIOSVersion;
         
         // Windows System Info
         sysinfo                     := discovery.runCommand(h, 'systeminfo | findstr /B /C:"OS Name" /C:"OS Version" /C:"OS Manufacturer"');
@@ -80,8 +80,8 @@ pattern TSAK_Host 1.0
         // Logged Users
         users                       := discovery.wmiQuery(h, 'select LastLogon, Name, UserType from Win32_NetworkLoginProfile', 'root\CIMV2');
         logged_users                := [];
-        for user in users do
-            user                    := "%user.Name%, %user.LastLogon%";
+        for row in users do
+            user                    := "%row.Name%, %row.LastLogon%";
             list.append(logged_users, user);
         end for;
         h.tsak_logged_users         := logged_users;
@@ -90,7 +90,7 @@ pattern TSAK_Host 1.0
         reg_owner                   := discovery.registryKey(h, raw "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\RegisteredOwner");
         h.tsak_registered_owner     := reg_owner.value;
     
-    else
+    else // Non-Windows
     
         // Get DNS Servers
         dns                         := discovery.runCommand(h, "nmcli dev show | grep DNS");
@@ -101,7 +101,7 @@ pattern TSAK_Host 1.0
         h.tsak_uptime               := up.result;
         
         // Last Reboot
-        last_boot                   := discovery.runCommand(host, "who -b");
+        last_boot                   := discovery.runCommand(h, "who -b");
         h.tsak_last_boot            := last_boot.result;
         
         // Get Build Date
@@ -115,6 +115,8 @@ pattern TSAK_Host 1.0
             build                   := discovery.runCommand(h, 'ls -ld --time-style=long-iso /var/log/anaconda 2> /dev/null || ls -ld --time-style=long-iso /var/log/installer 2> /dev/null');
         end if;
         h.tsak_build_date           := build.result;
+        
+    end if;
     
   end body;
     
@@ -136,22 +138,24 @@ pattern TSAK_UID 1.0
   end overview;
 
   triggers
-    on p:= DiscoveredProcess where not username or username = toText(uid);
+    on p:= DiscoveredProcess where username = none or username matches regex "^\d+$";
     
   end triggers;
   
   body
     
-    da                  := discovery.access(p);
-    if da.device_summary has subword "Windows" then
-        // Skip
-        stop;
-    else
-        pwd                 := discovery.fileGet(da, "/etc/passwd");
-        if pwd and pwd.content then
-            rx              := raw "(\w+):x:" + uid + ":";
-            uid             := regex.extract(pwd.content, rx, raw "\1", no_match:= p.username);
-            p.tsak_username := uid;
+    if text.toNumber(p.username) = p.uid then
+        da                      := discovery.access(p);
+        if da.device_summary has subword "Windows" then
+            // Skip
+            stop;
+        else
+            pwd                 := discovery.fileGet(da, "/etc/passwd");
+            if pwd and pwd.content then
+                rx              := raw "(\w+):x:" + p.uid + ":";
+                uid             := regex.extract(pwd.content, rx, raw "\1", no_match:= p.username);
+                p.tsak_username := uid;
+            end if;
         end if;
     end if;
     
