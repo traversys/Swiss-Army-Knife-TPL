@@ -3,9 +3,10 @@
 tpl 1.15 module TSAKLicense;
 
 metadata
-    __name:='Traversys Swiss Army Knife (TSAK)';
+    __name     :='Traversys License';
+    origin     :='Traversys';
     description:='GPL 3.0 License File';
-    tree_path:='Traversys', 'Extensions', 'TSAK GPL License';
+    tree_path  :='Traversys', 'Extensions', 'TSAK GPL License';
 end metadata;
 
 configuration gpl_license 1.0
@@ -688,5 +689,5 @@ configuration gpl_license 1.0
     """
 
     "Accept License" accept_gpl := true;
-    
+
 end configuration;
