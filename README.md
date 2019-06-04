@@ -1,7 +1,9 @@
-# Traversys Swiss-Army-Knife TPL Pattern
+# Traversys Swiss-Army-Knife TPL
 
 License: GPL-3.0-or-later
 
 For use with BMC Discovery (ADDM).
 
-Swiss Army Knife TPL file that features additional discovery commands to enrich Host information.
+Swiss Army Knife TPL package that features additional discovery commands and fixes for host enrichment.
+
+Patterns can be applied separately or in one go, but all must include the GPL license file.
