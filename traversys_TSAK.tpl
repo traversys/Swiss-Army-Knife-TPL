@@ -12,7 +12,7 @@ end metadata;
 
 from TSAKLicense import gpl_license 1.0;
 
-pattern TSAK_Host 1.2
+pattern TSAK_Host 1.3
   """
   Author: Wes Moskal-Fitzpatrick
 
@@ -29,6 +29,9 @@ pattern TSAK_Host 1.2
   2019-05-08 1.2 WMF : Local Groups and Members powershell command.
                        Fixed uptime typo.
                        Added DeviceGuard policy capture.
+  2019-06-04 1.3 WMF : Fixed ECA error in Linux uptime query.
+                       Fixed ECA error with Windows users wmi query.
+                       Updated local groups command with alternative methods.
 
   Troubleshooting Windows commands (remquery):
   1) Run cmd as Administrator
@@ -118,34 +121,52 @@ pattern TSAK_Host 1.2
             end if;
 
             // Logged Users
-            users                           := discovery.wmiQuery(h, 'select LastLogon, Name, UserType from Win32_NetworkLoginProfile', 'root\CIMV2');
-            loggedUsers                     := [];
-            for row in users do
-                user                        := "%row.Name%, %row.LastLogon%";
-                list.append(loggedUsers, user);
-            end for;
-            h.tsak_logged_users             := loggedUsers;
+            users       := discovery.wmiQuery(h, 'select LastLogon, Name, UserType from Win32_NetworkLoginProfile', 'root\CIMV2');
+            loggedUsers := [];
+            if users then
+                for row in users do
+                    user:= "%row.Name%, %row.LastLogon%";
+                    list.append(loggedUsers, user);
+                end for;
+                h.tsak_logged_users:= loggedUsers;
+            end if;
 
             // Registered Owner
-            regOwner                       := discovery.registryKey(h, raw "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\RegisteredOwner");
+            regOwner := discovery.registryKey(h, raw "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\RegisteredOwner");
             if regOwner and regOwner.value then
                 h.tsak_registered_owner     := regOwner.value;
             end if;
 
             // Get Groups and Members
-            psGroups                        := discovery.runCommand(h,
-                                               //'powershell "foreach ($LocalGroup in Get-LocalGroup){ Get-LocalGroupMember $LocalGroup -ErrorAction SilentlyContinue | select $LocalGroup.name, Name | convertTo-Json}"'
-                                               //'powershell "Get-LocalGroup"'
-                                               //'powershell "Get-LocalGroup | foreach { $_.Name }"'
-                                               'powershell "Get-LocalGroup | foreach { Get-LocalGroupMember $_.Name -ErrorAction SilentlyContinue | select $_.Name, Name | Write-Host }"'
-                                               );
-            if psGroups and psGroups.result then
-                groups:= regex.extractAll(psGroups.result, regex "@\{(.*?)=;\sName=(.*?)}");
-                log.debug("Groups = %groups%");
-                h.tsak_group_membership:= groups;
+            ngCmd:= raw '''FOR /F "skip=4 tokens=*" %i IN ('net localgroup') DO @echo %i''';
+            groupMembers:= [];
+            netGroups := discovery.runCommand(h, ngCmd);
+            if netGroups and netGroups.result then
+                groups:= regex.extractAll(netGroups.result, regex "\*(.*)");
+                for group in groups do
+                    // FOR /F "skip=6 tokens=*" %i IN ('net localgroup administrators ^| findstr /vb "The command completed successfully."')  DO @echo %i
+                    ngGroupCmd:= raw '''FOR /F "skip=6 tokens=*" %i IN ('net localgroup "''' + text.rightStrip(group) + raw '''" ^| findstr /vb "The command completed successfully."') DO @echo %i''';
+                    users:= discovery.runCommand(h, ngGroupCmd);
+                end for;
+            else
+                psGroups := discovery.runCommand(h,
+                        raw '%windir%\System32\WindowsPowerShell\v1.0\powershell.exe "Get-LocalGroup | foreach { Get-LocalGroupMember $_.Name -ErrorAction SilentlyContinue | select $_.Name, Name | Write-Host }"'
+                        //'powershell "foreach ($LocalGroup in Get-LocalGroup){ Get-LocalGroupMember $LocalGroup -ErrorAction SilentlyContinue | select $LocalGroup.name, Name | convertTo-Json}"'
+                        //'powershell "Get-LocalGroup"'
+                        //'powershell "Get-LocalGroup | foreach { $_.Name }"'
+                        );
+                if psGroups and psGroups.result then
+                    groups:= regex.extractAll(psGroups.result, regex "@\{(.*?)=;\sName=(.*?)}");
+                    log.debug("Groups = %groups%");
+                    for group in groups do
+        				log.debug("User / Group = %group%");
+                        list.append(groupMembers, group);
+                    end for;
+                    h.tsak_group_membership:= groupMembers;
+                end if;
             end if;
 
-            deviceGuard                     := discovery.runCommand(h, 'powershell "get-cipolicyinfo"');
+            deviceGuard := discovery.runCommand(h, 'powershell "get-cipolicyinfo"');
             if deviceGuard and deviceGuard.result then
                 h.tsak_device_guard:= deviceGuard.result;
             end if;
@@ -164,9 +185,9 @@ pattern TSAK_Host 1.2
             // Get Host Uptime
             up                              := discovery.runCommand(h, "uptime -p");
             if up and up.result matches "usage:" then
-                up                      := discovery.runCommand(h, "uptime");
+                up                          := discovery.runCommand(h, "uptime");
+                h.tsak_uptime               := up.result;
             end if;
-            h.tsak_uptime               := up.result;
 
             // Last Reboot
             lastBoot                        := discovery.runCommand(h, "who -b");
@@ -238,6 +259,64 @@ pattern TSAK_UID 1.1
                     p.tsak_username := uid;
                 end if;
             end if;
+        end if;
+
+    end body;
+
+end pattern;
+
+
+pattern Win7_2008Fix 1.0
+    """
+        This pattern fixes Windows Version 6.1.7601 which stands for both Windows 7 and Windows 2008 R2.
+        If WMI and RemQuery fails - then the OS name string is not returned.
+
+        Change History:
+        2018-05-01 1.0 WMF : Created.
+
+        Validation Query:
+        search Host where os = 'Microsoft Windows [Version 6.1.7601]'
+        show name, type, os_version, os, age_count, #:::DiscoveryAccess.#:::DeviceInfo.os
+
+    """
+
+    overview
+        tags Windows, Traversys;
+    end overview;
+
+    triggers
+        on h:= Host created, confirmed where os = "Microsoft Windows [Version 6.1.7601]";
+    end triggers;
+
+    body
+
+        if gpl_license.accept_gpl = false then
+            stop;
+        end if;
+
+        sysInfo         := discovery.runCommand(h, 'systeminfo | findstr /B /C:"OS Name" /C:"OS Version" /C:"OS Manufacturer"');
+        regProductName  := discovery.registryKey(h, raw "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProductName");
+
+        reqList         := discovery.listRegistry(h, raw "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+        regReleaseId    := discovery.registryKey(h, raw "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ReleaseId");
+
+        hOS:= h.os;
+
+        if sysInfo and sysInfo.result then
+            hOS:= regex.extract(sysInfo.result, regex "OS Name:\s+(.*)", raw "\1");
+            h.os_version:= regex.extract(hOS, regex "Microsoft Windows (.*) (Enterprise|Standard)", raw "\1", no_match:= hOS);
+            h.os_edition:= regex.extract(hOS, regex "Microsoft Windows (.*) (Enterprise|Standard)", raw "\2", no_match:= hOS);
+        elif regProductName and regProductName.value then
+            hOS:= regProductName.value;
+            h.os:= hOS;
+            h.os_version:= regex.extract(hOS, regex "Windows (.*) (Enterprise|Standard)", raw "\1", no_match:= hOS);
+            h.os_edition:= regex.extract(hOS, regex "Windows (.*) (Enterprise|Standard)", raw "\2", no_match:= hOS);
+        end if;
+
+        if hOS matches "Windows 7" then
+            h.host_type:= "Windows Desktop";
+            h.type:= "Windows Desktop";
+            h._os_modified:= true;
         end if;
 
     end body;
