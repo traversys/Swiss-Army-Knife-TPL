@@ -12,7 +12,7 @@ end metadata;
 
 from TSAKLicense import gpl_license 1.0;
 
-pattern TSAK_Host 1.3
+pattern TSAK_Host 1.4
   """
   Author: Wes Moskal-Fitzpatrick
 
@@ -32,6 +32,7 @@ pattern TSAK_Host 1.3
   2019-06-04 1.3 WMF : Fixed ECA error in Linux uptime query.
                        Fixed ECA error with Windows users wmi query.
                        Updated local groups command with alternative methods.
+  2020-04-22 1.4 WMF : Added Timezone info.
 
   Troubleshooting Windows commands (remquery):
   1) Run cmd as Administrator
@@ -211,6 +212,35 @@ pattern TSAK_Host 1.3
             end if;
             if build and build.result then
                 h.tsak_build_date           := build.result;
+            end if;
+
+            // Get Host timezones
+            if h.os_type matches "Linux" then
+                tz:= discovery.runCommand(h, "cat /etc/timezone");
+                if tz and tz.result then
+                    h.timezone:= tzCmd.result;
+                else
+                    tz:= discovery.runCommand(h, "timedatectl | grep 'Time zone'");
+                    if tz and tz.result then
+                        h.timezone:= regex.extract(tz.result, regex "Time\szone:\s+(\S+)", raw "\1");
+                    end if;
+                end if;
+            elif h.os_type = "AIX" then
+                tz:= discovery.runCommand(h, "echo $TZ");
+                if tz and tz.result then
+                    h.timezone:= tz.result;
+                end if;
+            elif h.os_type = "Solaris" then
+                tz:= discovery.runCommand(h, "nlsadm get-timezone");
+                if tz and tz.result then
+                    h.timezone:= regex.extract(tz.result, regex "timezone\=(\S+)", raw "\1");
+                end if;
+            elif h.os_type = "Windows" then
+                tz:= discovery.runCommand(h, "tzutil /g", raw! "\1");
+                if tz and tz.result then
+                    h.timezone:= tzCmd.result;
+                end if;
+
             end if;
 
         end if;
