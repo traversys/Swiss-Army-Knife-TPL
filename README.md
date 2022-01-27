@@ -1,3 +1,5 @@
+NOTE: This Repo is now merged and maintained at https://github.com/traversys/TPL_Repo
+
 # Traversys Swiss-Army-Knife TPL
 
 License: GPL-3.0-or-later
